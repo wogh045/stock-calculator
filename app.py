@@ -4,31 +4,41 @@ import yfinance as yf
 # 웹 페이지 기본 설정
 st.set_page_config(page_title="주식 가치평가 종합 계산기", layout="centered", page_icon="📈")
 
+# 실시간 환율 가져오기 (매번 불러오면 느려지므로 캐싱 처리)
+@st.cache_data(ttl=3600)
+def get_exchange_rate():
+    try:
+        return yf.Ticker("KRW=X").history(period="1d")['Close'].iloc[-1]
+    except:
+        return 1350.0  # 환율 로드 실패 시 임시 기준값
+
+usd_krw = get_exchange_rate()
+
+# 고평가/저평가 판별 함수
+def evaluate_per(per):
+    if per is None or per <= 0: return "⚫ 평가 불가 (적자)"
+    elif per < 10: return "🟢 저평가 (10 미만)"
+    elif per <= 20: return "🟡 적정가 (10~20)"
+    else: return "🔴 고평가 (20 초과)"
+
+def evaluate_pbr(pbr):
+    if pbr is None or pbr <= 0: return "⚫ 평가 불가 (자본잠식)"
+    elif pbr < 1: return "🟢 저평가 (1 미만)"
+    elif pbr <= 1.5: return "🟡 적정가 (1~1.5)"
+    else: return "🔴 고평가 (1.5 초과)"
+
 st.title("📊 주식 가치평가 종합 계산기")
+st.info(f"💡 현재 적용된 실시간 원/달러 환율: 약 **{usd_krw:,.1f}원**")
 
-# PER, PBR 개념 요약 (사용자가 원할 때만 펼쳐보게 숨김 처리)
-with st.expander("💡 PER과 PBR 개념 요약 보기 (클릭해서 펼치기)"):
-    st.markdown("""
-    **1. PER (주가수익비율) : "이 회사가 돈을 버는 능력에 비해 주가가 적당한가?"**
-    - **계산법:** 현재 주가 ÷ 1주당 순이익(EPS)
-    - **의미:** 낮을수록 수익 대비 주가가 저평가되어 있으며, 투자 원금을 회수하는 데 걸리는 기간(년)을 의미하기도 합니다.
-
-    **2. PBR (주가순자산비율) : "이 회사가 가진 재산에 비해 주가가 적당한가?"**
-    - **계산법:** 현재 주가 ÷ 1주당 순자산(BPS)
-    - **의미:** 1 미만이면 회사가 가진 장부상 순재산보다도 주가가 싸게 거래되는 '저평가' 상태를 뜻합니다.
-    """)
-
-# 두 개의 화면을 탭으로 나누기
 tab1, tab2 = st.tabs(["🔍 실시간 종목 검색", "🎛️ 가상 시뮬레이터 (직접 조절)"])
 
 # ----- 탭 1: 실시간 종목 검색 -----
 with tab1:
-    st.subheader("야후 파이낸스 실시간 데이터 연동")
-    ticker_input = st.text_input("종목 코드 입력 (예: 애플은 AAPL, 삼성전자는 005930.KS)", value="AAPL")
+    ticker_input = st.text_input("종목 코드 입력 (예: 애플은 AAPL, 삼성전자는 005930.KS)", value="000660.KS") # 하이닉스 기본값
 
     if st.button("🔄 실시간 데이터 불러오기 / 새로고침"):
         if ticker_input:
-            with st.spinner('실시간 데이터를 가져오는 중입니다...'):
+            with st.spinner('데이터를 가져오는 중입니다...'):
                 try:
                     stock = yf.Ticker(ticker_input.strip().upper())
                     info = stock.info
@@ -44,48 +54,48 @@ with tab1:
                         
                         st.markdown(f"#### 🏢 {name}")
                         col1, col2, col3 = st.columns(3)
-                        col1.metric("실시간 주가", f"{price:,.2f}")
-                        col2.metric("직전 EPS (주당순이익)", f"{eps:,.2f}")
-                        col3.metric("직전 BPS (주당순자산)", f"{bps:,.2f}")
+                        
+                        # 한국 주식이면 원화->달러, 미국 주식이면 달러->원화 환산
+                        if ".KS" in ticker_input.upper() or ".KQ" in ticker_input.upper():
+                            col1.metric("실시간 주가", f"{price:,.0f} 원", f"약 ${price/usd_krw:,.2f}", delta_color="off")
+                        else:
+                            col1.metric("실시간 주가", f"${price:,.2f}", f"약 {price*usd_krw:,.0f} 원", delta_color="off")
+                            
+                        col2.metric("직전 EPS", f"{eps:,.2f}")
+                        col3.metric("직전 BPS", f"{bps:,.2f}")
                         
                         st.divider()
-                        
                         st.markdown("##### 🔍 가치 평가 결과")
                         col4, col5 = st.columns(2)
                         
-                        if per: col4.metric("✅ PER (주가수익비율)", f"{per:.2f} 배")
-                        else: col4.metric("✅ PER", "적자 기업")
-                            
-                        if pbr: col5.metric("✅ PBR (주가순자산비율)", f"{pbr:.2f} 배")
-                        else: col5.metric("✅ PBR", "자본 잠식")
+                        per_text = f"{per:.2f} 배" if per else "계산 불가"
+                        pbr_text = f"{pbr:.2f} 배" if pbr else "계산 불가"
+                        
+                        col4.metric(f"✅ PER ({evaluate_per(per)})", per_text)
+                        col5.metric(f"✅ PBR ({evaluate_pbr(pbr)})", pbr_text)
                     else:
-                        st.warning("⚠️ 야후 파이낸스에서 해당 종목의 재무 데이터를 완전히 제공하지 않습니다.")
+                        st.warning("⚠️ 재무 데이터를 완전히 제공하지 않는 종목입니다.")
                 except Exception as e:
-                    st.error("오류가 발생했습니다. 종목 코드가 정확한지 확인해 주세요.")
-        else:
-            st.warning("종목 코드를 입력해 주세요.")
+                    st.error("오류가 발생했습니다. 종목 코드를 확인해 주세요.")
 
-# ----- 탭 2: 가상 시뮬레이터 (슬라이더 바) -----
+# ----- 탭 2: 가상 시뮬레이터 (슬라이더 및 수기 입력) -----
 with tab2:
     st.subheader("주가, 이익, 자산을 직접 움직여보세요!")
-    st.write("아래의 바(Slider)를 좌우로 조절하거나 숫자를 직접 기입하면 하단의 PER, PBR 결과가 실시간으로 변합니다.")
+    st.write("💡 **Tip:** 바 위의 숫자를 클릭하면 키보드로 정확한 금액을 직접 입력할 수 있습니다.")
     
-    # 슬라이더(바) 및 숫자 입력 UI 구성
-    sim_price = st.slider("💰 가상의 현재 주가 (원)", min_value=1000, max_value=200000, value=50000, step=1000)
-    sim_eps = st.slider("📈 1주당 순이익 (EPS)", min_value=100, max_value=20000, value=5000, step=100)
-    sim_bps = st.slider("🏦 1주당 순자산 (BPS)", min_value=1000, max_value=150000, value=50000, step=1000)
+    # 최댓값을 500만원(5,000,000)으로 확장
+    sim_price = st.slider("💰 가상의 현재 주가 (원)", min_value=1000, max_value=5000000, value=180000, step=1000)
+    st.caption(f"💵 달러 환산 금액: 약 **${sim_price/usd_krw:,.2f}**")
     
-    # 조절된 값으로 PER, PBR 자동 계산
+    sim_eps = st.slider("📈 1주당 순이익 (EPS)", min_value=100, max_value=500000, value=20000, step=500)
+    sim_bps = st.slider("🏦 1주당 순자산 (BPS)", min_value=1000, max_value=5000000, value=150000, step=1000)
+    
     sim_per = sim_price / sim_eps if sim_eps > 0 else 0
     sim_pbr = sim_price / sim_bps if sim_bps > 0 else 0
     
     st.divider()
     st.markdown("#### 🔍 시뮬레이션 결과")
     
-    # 결과 나란히 배치
     col_sim1, col_sim2 = st.columns(2)
-    col_sim1.metric("✅ 계산된 PER", f"{sim_per:.2f} 배")
-    col_sim2.metric("✅ 계산된 PBR", f"{sim_pbr:.2f} 배")
-    
-    # 값의 변화에 따른 동적 해석 문구 제공
-    st.info(f"**해석:** 설정하신 값에 따르면, 이 기업에 투자한 원금을 순이익으로 모두 회수하는 데 이론적으로 **{sim_per:.1f}년**이 걸립니다. 또한 주가가 회사가 가진 순수 재산에 비해 **{sim_pbr:.1f}배**의 가격으로 시장에서 거래되고 있음을 의미합니다.")
+    col_sim1.metric(f"✅ 예상 PER ({evaluate_per(sim_per)})", f"{sim_per:.2f} 배")
+    col_sim2.metric(f"✅ 예상 PBR ({evaluate_pbr(sim_pbr)})", f"{sim_pbr:.2f} 배")
